@@ -15,7 +15,7 @@ Excalidraw already has extensive unit and component tests (Vitest). This project
 |-------|---------------|--------------|
 | Unit / component | Upstream (Vitest, ~49 test files) | Not duplicated |
 | **E2E, real browser** | Gap | **Automated with Playwright** |
-| **Exploratory** | Gap | **Session-based, documented** |
+| **Exploratory** | - | **Session-based, documented** |
 | Visual regression | Gap | Small, targeted set |
 
 ## 3. Approach by activity
