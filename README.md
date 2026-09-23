@@ -32,7 +32,7 @@ tests/                    (Phase 3) Playwright suite
 
 ## Version tested
 
-Fill this in before any results are recorded, and update it if I re-test on a newer version.
+Note this in before any results are recorded, and update it if you re-test on a newer version.
 
 | Item | Value |
 |------|-------|
@@ -40,7 +40,7 @@ Fill this in before any results are recorded, and update it if I re-test on a ne
 | Commit date | `<YYYY-MM-DD>` |
 | Browser | Chromium `<version>` |
 | OS | Windows 11 |
-| Date tested | `<YYYY-MM-DD>` |
+
 
 Manual sessions on the hosted app (excalidraw.com) record the date and browser version instead of a commit, since the hosted app changes over time. Bugs found there are reproduced on a local build before being reported.
 
