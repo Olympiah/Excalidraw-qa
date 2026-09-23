@@ -379,6 +379,40 @@ export class CanvasPage {
     await this.page.keyboard.press(`Shift+${key}`);
   }
 
+  /** Ctrl/Cmd+D: duplicates the current selection (copy is offset and selected). */
+  async duplicateSelected() {
+    await this.page.keyboard.press(`${this.mod}+D`);
+  }
+
+  /** Ctrl/Cmd+C. Excalidraw handles the real "copy" event, so no clipboard permission is needed. */
+  async copySelected() {
+    await this.page.keyboard.press(`${this.mod}+C`);
+  }
+
+  async cutSelected() {
+    await this.page.keyboard.press(`${this.mod}+X`);
+  }
+
+  async paste() {
+    await this.page.keyboard.press(`${this.mod}+V`);
+  }
+
+  /**
+   * Polls the persisted scene until it holds exactly `count` elements.
+   * Needed after copy/paste/duplicate because getScene() reads localStorage,
+   * which lags the action by the ~300ms save debounce.
+   */
+  async waitForElementCount(count: number): Promise<ExcalidrawElement[]> {
+    let elements: ExcalidrawElement[] = [];
+    await expect
+      .poll(async () => {
+        elements = (await this.getScene()).elements;
+        return elements.length;
+      })
+      .toBe(count);
+    return elements;
+  }
+
   async undo() {
     // Ctrl+Z on Windows/Linux, Cmd+Z on macOS.
     await this.page.keyboard.press(
