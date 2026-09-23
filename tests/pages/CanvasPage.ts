@@ -1,4 +1,4 @@
-import { Page, expect } from "@playwright/test";
+import { Download, Page, expect } from "@playwright/test";
 
 export interface Point {
   x: number;
@@ -210,6 +210,41 @@ export class CanvasPage {
   /** Deletes whatever is currently selected. */
   async deleteSelected() {
     await this.page.keyboard.press("Delete");
+  }
+
+  /**
+   * Rotates the selected element to `targetAngle` (radians, 0 = upright,
+   * increasing clockwise) by dragging its rotation handle.
+   *
+   * Excalidraw computes the new angle from the drag's absolute pointer
+   * position, not from a delta: per resizeElements.ts,
+   * `angle = normalizeRadians(PI/2 + atan2(pointerY - cy, pointerX - cx))`,
+   * where (cx, cy) is the element's own center. So rather than dragging by
+   * some (dx, dy), this works backwards from that formula to find the
+   * pointer position that produces `targetAngle`, and drags there directly.
+   * The mousedown point only needs to land within the rotation handle's hit
+   * area (rendered just above the element's top-center edge) - it's the
+   * mouseup position that determines the resulting angle.
+   */
+  async rotateSelectedElement(element: ExcalidrawElement, targetAngle: number) {
+    const cx = element.x + element.width / 2;
+    const cy = element.y + element.height / 2;
+    const handle = { x: cx, y: element.y - 20 };
+    // Any radius works since only the angle from center matters; 100px keeps
+    // the drag well clear of the element itself.
+    const radius = 100;
+    const theta = targetAngle - Math.PI / 2;
+    const target = {
+      x: cx + radius * Math.cos(theta),
+      y: cy + radius * Math.sin(theta),
+    };
+    await this.dragOnCanvas(handle, target);
+  }
+
+  /** Flips the current selection horizontally or vertically about its own center. */
+  async flipSelectedElement(direction: "horizontal" | "vertical") {
+    const key = direction === "horizontal" ? "H" : "V";
+    await this.page.keyboard.press(`Shift+${key}`);
   }
 
   async undo() {
@@ -434,5 +469,81 @@ export class CanvasPage {
         { intervals: [100, 250, 350], timeout: 8000 },
       )
       .toBe(expectedCount);
+  }
+
+  /** Selects everything on the canvas and deletes it, leaving an empty scene. */
+  async clearCanvas() {
+    await this.selectTool("selection");
+    await this.page.keyboard.press(
+      process.platform === "darwin" ? "Meta+A" : "Control+A",
+    );
+    await this.deleteSelected();
+  }
+
+  /**
+   * Opens the top-left hamburger menu (Save/Load/Export live there).
+   * Deliberately NOT getByTestId("dropdown-menu-button") - that testid is
+   * shared by every DropdownMenuTrigger in the app (e.g. the toolbar's
+   * "More tools" flyout), so it isn't unique to this menu. This menu's
+   * trigger has its own testid, "main-menu-trigger" (see MainMenu.tsx),
+   * which is what actually identifies it.
+   */
+  private async openMainMenu() {
+    await this.page.getByTestId("main-menu-trigger").click();
+  }
+
+  /**
+   * Saves the current scene to a new .excalidraw file and returns the
+   * Playwright Download.
+   *
+   * Deliberately NOT the main menu's "save-button" (SaveToActiveFile,
+   * labeled "Save to current file"): its predicate requires
+   * appState.fileHandle to already be set (see actionExport.tsx), so on a
+   * scene that's never been saved/opened before, that item doesn't render
+   * at all - clicking a locator for it just hangs waiting for an element
+   * that will never appear. The item that's actually present for a
+   * first-time save is "Save to..." (json-export-button, buttons.export),
+   * which opens a dialog whose "Save to file" button (exportDialog.disk_button)
+   * triggers the real download - this method drives that flow instead.
+   */
+  async saveSceneToFile(): Promise<Download> {
+    await this.openMainMenu();
+    await this.page.getByTestId("json-export-button").click();
+    const [download] = await Promise.all([
+      this.page.waitForEvent("download"),
+      this.page.getByRole("button", { name: "Save to file" }).click(),
+    ]);
+    return download;
+  }
+
+  /**
+   * Loads a scene from a local file via the main menu's Open item. Assumes
+   * the canvas is currently empty — Excalidraw shows an "overwrite scene?"
+   * confirm modal instead of the file picker when there's existing content,
+   * which this method doesn't handle.
+   */
+  async loadSceneFromFile(filePath: string) {
+    await this.openMainMenu();
+    const [chooser] = await Promise.all([
+      this.page.waitForEvent("filechooser"),
+      this.page.getByTestId("load-button").click(),
+    ]);
+    await chooser.setFiles(filePath);
+  }
+
+  /**
+   * Opens the image export dialog from the main menu and exports as PNG,
+   * returning the Playwright Download. There's no data-testid on the
+   * dialog's PNG button (see ImageExportDialog.tsx), so it's targeted by
+   * its visible label instead.
+   */
+  async exportImageAsPng(): Promise<Download> {
+    await this.openMainMenu();
+    await this.page.getByTestId("image-export-button").click();
+    const [download] = await Promise.all([
+      this.page.waitForEvent("download"),
+      this.page.getByRole("button", { name: "Export to PNG" }).click(),
+    ]);
+    return download;
   }
 }
