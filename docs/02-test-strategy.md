@@ -33,7 +33,7 @@ Excalidraw already has extensive unit and component tests (Vitest). This project
 **Core challenge:** shapes are drawn on `<canvas>`, so there is no DOM node per shape.
 
 Assertion strategy, in order of preference:
-1. **Scene data**: read the persisted scene (`localStorage["excalidraw"]`) or exported `.excalidraw` JSON and assert on element counts, types, positions, sizes, group ids. Fast, deterministic, meaningful.
+1. **Scene data**: read the persisted scene — elements from `localStorage["excalidraw"]`, app state (selection, tool, zoom) from the separate `localStorage["excalidraw-state"]` — or exported `.excalidraw` JSON, and assert on element counts, types, positions, sizes, group ids. Fast, deterministic, meaningful.
 2. **UI state**: toolbar `data-testid` selectors, active-tool state, properties panel values.
 3. **Visual snapshots**: only for a small set of stable scenes (export output, a rendered scene at fixed viewport). Kept deliberately few to limit flakiness.
 
