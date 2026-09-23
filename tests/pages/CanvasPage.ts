@@ -31,6 +31,11 @@ export interface ExcalidrawElement {
   // this suite currently observes it ever being true.
   isDeleted: boolean;
   groupIds: string[];
+  // Only present on text elements. Typed explicitly (rather than reading it
+  // through the [key: string]: unknown index and casting at the call site)
+  // so autosave tests can assert on restored text content without an
+  // `as unknown as { text: string }` cast.
+  text?: string;
   [key: string]: unknown;
 }
 
@@ -68,6 +73,21 @@ export class CanvasPage {
     await this.page.locator("canvas.excalidraw__canvas").first().waitFor();
   }
 
+  /**
+   * Reloads the current page and waits for the canvas to remount.
+   *
+   * Deliberately not goto(): goto() navigates to "/" fresh, which is the
+   * fixture's clean-slate path (used once per test, before localStorage has
+   * anything in it). reload() is what autosave tests need instead — it
+   * models a real user hitting refresh or recovering from a crash
+   * mid-session on the SAME origin, exercising the actual load-from-storage
+   * path rather than a fresh navigation.
+   */
+  async reload() {
+    await this.page.reload();
+    await this.page.locator("canvas.excalidraw__canvas").first().waitFor();
+  }
+
   // Keyboard shortcuts per tool, shown right on the toolbar buttons
   // themselves (see packages/excalidraw/components/Tools.tsx). Switching
   // tools by shortcut rather than clicking the toolbar is deliberate here:
@@ -99,6 +119,24 @@ export class CanvasPage {
   async drawRectangle(from: Point, to: Point) {
     await this.selectTool("rectangle");
     await this.dragOnCanvas(from, to);
+  }
+
+  /**
+   * Selects the text tool, clicks to place a text cursor at `at`, types
+   * `content`, then presses Escape to commit it as an element.
+   *
+   * Unlike drawRectangle, this isn't a drag: Excalidraw's text tool creates
+   * an editable text box at a single click point rather than a
+   * click-and-drag bounding box, and the element isn't finalized (written
+   * into the scene) until the editor loses focus/commits - Escape does
+   * that without leaving stray focus on the canvas the way clicking
+   * elsewhere might.
+   */
+  async addText(at: Point, content: string) {
+    await this.selectTool("text");
+    await this.page.mouse.click(at.x, at.y);
+    await this.page.keyboard.type(content);
+    await this.page.keyboard.press("Escape");
   }
 
   /**
@@ -219,25 +257,37 @@ export class CanvasPage {
 
   /**
    * Polls until the element identified by `id` has geometry different from
-   * `previous` on at least one of x/y/width/height, then returns the
-   * settled element. Used after move/resize actions: like the scene write
-   * itself, these are debounced, so reading immediately after the action
-   * can still see the pre-action geometry.
+   * `previous` on at least one of x/y/width/height AND has stopped changing
+   * (two consecutive identical reads), then returns the settled element.
+   * Used after move/resize actions: like the scene write itself, these are
+   * debounced, so reading immediately after the action can still see the
+   * pre-action geometry.
+   *
+   * The stability check (not just "first read that differs") matters for a
+   * slow drag: an early poll could catch the element mid-drag, already
+   * different from `previous` but not yet at its final position. Returning
+   * that in-between read would hand a caller a target geometry that never
+   * actually gets persisted, since the drag keeps moving after that read.
    */
   async waitForElementChange(
     id: string,
     previous: ExcalidrawElement,
   ): Promise<ExcalidrawElement> {
+    let lastSnapshot: string | null = null;
     await expect
       .poll(async () => {
         const el = await this.getElementById(id);
         if (!el) return false;
-        return (
+        const changed =
           el.x !== previous.x ||
           el.y !== previous.y ||
           el.width !== previous.width ||
-          el.height !== previous.height
-        );
+          el.height !== previous.height;
+        if (!changed) return false;
+        const snapshot = JSON.stringify(el);
+        const stable = snapshot === lastSnapshot;
+        lastSnapshot = snapshot;
+        return stable;
       })
       .toBe(true);
     return (await this.getElementById(id))!;
@@ -269,6 +319,36 @@ export class CanvasPage {
     return (await this.getElementById(id))!;
   }
 
+  /**
+   * Polls until an element of `type` matching `expected` geometry (within
+   * 1px) shows up in the scene, then returns it. For use right after
+   * drawing, when the target geometry is already known from the draw
+   * coordinates but the element's id isn't yet - waiting for a known target
+   * value is more reliable than expectVisibleElementCount's "stopped
+   * changing" check, which can in principle settle on the wrong stable
+   * plateau if a drag produces more than one (see its doc comment).
+   */
+  async waitForDrawnElement(
+    type: string,
+    expected: { x: number; y: number; width: number; height: number },
+  ): Promise<ExcalidrawElement> {
+    const closeEnough = (a: number, b: number) => Math.abs(a - b) < 1;
+    const matches = (el: ExcalidrawElement) =>
+      el.type === type &&
+      closeEnough(el.x, expected.x) &&
+      closeEnough(el.y, expected.y) &&
+      closeEnough(el.width, expected.width) &&
+      closeEnough(el.height, expected.height);
+    await expect
+      .poll(async () => {
+        const { elements } = await this.getScene();
+        return elements.some(matches);
+      })
+      .toBe(true);
+    const { elements } = await this.getScene();
+    return elements.find(matches)!;
+  }
+
   async getAppState(): Promise<Record<string, unknown> | null> {
     const raw = await this.page.evaluate(
       ({ stateKey }) => localStorage.getItem(stateKey),
@@ -292,6 +372,16 @@ export class CanvasPage {
    * 150" failure in practice. Requiring the same serialized elements array
    * on two consecutive polls confirms the scene has actually stopped
    * changing, not just that something showed up.
+   *
+   * This two-reads check is good enough for undo-redo.spec.ts, the only
+   * other consumer of this method - it doesn't chain a draw straight into
+   * reading exact geometry off elements[0] the way the autosave test that
+   * flaked did. If a similar flake shows up here for undo/redo, reach for
+   * expectVisibleElementCountSettled (stricter, slower) or
+   * waitForDrawnElement (when the target geometry is already known) rather
+   * than tightening this method - it's shared, and unrelated tests
+   * shouldn't get slower or behave differently to fix a problem specific to
+   * one spec file.
    */
   async expectVisibleElementCount(expectedCount: number) {
     let previousSnapshot: string | null = null;
@@ -303,6 +393,46 @@ export class CanvasPage {
         previousSnapshot = snapshot;
         return isStable ? elements.length : NaN; // NaN never equals expectedCount, so an unstable read keeps polling
       })
+      .toBe(expectedCount);
+  }
+
+  /**
+   * Stricter, slower sibling of expectVisibleElementCount: requires three
+   * consecutive matching reads instead of two, spaced past the ~300ms save
+   * debounce (100ms/250ms/350ms intervals), so two reads can't both land
+   * inside the same in-flight write during a multi-step drag.
+   *
+   * Added for autosave.spec.ts after a real flake there: dragOnCanvas sends
+   * 10 intermediate pointermove events, and localStorage's debounced save
+   * fired more than once during a drag, letting an in-between size (e.g.
+   * width 15 instead of the final 150) sit unchanged across two fast poll
+   * ticks before the real write landed - exactly what
+   * expectVisibleElementCount's two-reads check is supposed to catch, but
+   * didn't in that case.
+   *
+   * Deliberately a separate method rather than a change to
+   * expectVisibleElementCount itself: undo-redo.spec.ts uses that method
+   * too and has shown no sign of this flake, so there's no reason to make
+   * every one of its calls ~0.7s slower to guard against a failure mode it
+   * hasn't hit. Where a test already knows its exact target geometry (e.g.
+   * "should end up 150px wide"), prefer waitForDrawnElement or
+   * waitForElementMatch instead of either of these two - waiting for a
+   * known value is more reliable than waiting for change to stop.
+   */
+  async expectVisibleElementCountSettled(expectedCount: number) {
+    let previousSnapshot: string | null = null;
+    let stableStreak = 0;
+    await expect
+      .poll(
+        async () => {
+          const { elements } = await this.getScene();
+          const snapshot = JSON.stringify(elements);
+          stableStreak = snapshot === previousSnapshot ? stableStreak + 1 : 0;
+          previousSnapshot = snapshot;
+          return stableStreak >= 2 ? elements.length : NaN;
+        },
+        { intervals: [100, 250, 350], timeout: 8000 },
+      )
       .toBe(expectedCount);
   }
 }

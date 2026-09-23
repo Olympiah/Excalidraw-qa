@@ -36,11 +36,24 @@ test.describe("Undo / redo", () => {
   }) => {
     const from = { x: 550, y: 300 };
     const to = { x: 700, y: 400 };
+    // Known target geometry from the draw coordinates - waited for directly
+    // via waitForDrawnElement rather than expectVisibleElementCount +
+    // elements[0]. That combination can catch a mid-drag, not-yet-final
+    // size (dragOnCanvas sends 10 intermediate pointermove events, and
+    // Excalidraw inserts the element at pointerdown before the drag
+    // finishes) - a real flake found in autosave.spec.ts's equivalent
+    // pattern. Waiting for the known final size instead can't be fooled by
+    // a momentarily-stable in-between value the way a "stopped changing"
+    // check still technically can.
+    const geometry = {
+      x: from.x,
+      y: from.y,
+      width: to.x - from.x,
+      height: to.y - from.y,
+    };
 
     await canvasPage.drawRectangle(from, to);
-    await canvasPage.expectVisibleElementCount(1);
-
-    const drawn = (await canvasPage.getScene()).elements[0];
+    const drawn = await canvasPage.waitForDrawnElement("rectangle", geometry);
     expect(drawn.type).toBe("rectangle");
 
     // Undo removes the shape from the visible scene. Note this doesn't mean
@@ -65,12 +78,13 @@ test.describe("Undo / redo", () => {
   });
 
   test("undo reverts a move, redo reapplies it", async ({ canvasPage }) => {
+    // Known target geometry, waited for directly - see the core smoke
+    // test's comment above for why this replaces expectVisibleElementCount
+    // + elements[0]. This geometry becomes the move's starting point below,
+    // so it has to be the real final draw, not a mid-drag snapshot.
+    const geometry = { x: 550, y: 300, width: 150, height: 100 };
     await canvasPage.drawRectangle({ x: 550, y: 300 }, { x: 700, y: 400 });
-    // Wait for the debounced localStorage write before reading the scene —
-    // reading immediately can catch a still-empty scene (see
-    // expectVisibleElementCount's doc comment in CanvasPage.ts).
-    await canvasPage.expectVisibleElementCount(1);
-    const drawn = (await canvasPage.getScene()).elements[0];
+    const drawn = await canvasPage.waitForDrawnElement("rectangle", geometry);
 
     await canvasPage.selectElement(drawn);
     await canvasPage.moveSelectedElement(drawn, 100, 50);
@@ -92,9 +106,11 @@ test.describe("Undo / redo", () => {
   });
 
   test("undo reverts a resize, redo reapplies it", async ({ canvasPage }) => {
+    // Known target geometry, waited for directly (see the core smoke test's
+    // comment for why) - this becomes the resize's starting point below.
+    const geometry = { x: 550, y: 300, width: 150, height: 100 };
     await canvasPage.drawRectangle({ x: 550, y: 300 }, { x: 700, y: 400 });
-    await canvasPage.expectVisibleElementCount(1);
-    const drawn = (await canvasPage.getScene()).elements[0];
+    const drawn = await canvasPage.waitForDrawnElement("rectangle", geometry);
 
     await canvasPage.selectElement(drawn);
     await canvasPage.resizeSelectedElement(drawn, 80, 60);
@@ -115,9 +131,12 @@ test.describe("Undo / redo", () => {
   });
 
   test("undo reverts a delete, redo reapplies it", async ({ canvasPage }) => {
+    // Known target geometry, waited for directly (see the core smoke test's
+    // comment for why) - drives selectElement's marquee-select below, so a
+    // mid-drag capture here would make the delete select/delete nothing.
+    const geometry = { x: 550, y: 300, width: 150, height: 100 };
     await canvasPage.drawRectangle({ x: 550, y: 300 }, { x: 700, y: 400 });
-    await canvasPage.expectVisibleElementCount(1);
-    const drawn = (await canvasPage.getScene()).elements[0];
+    const drawn = await canvasPage.waitForDrawnElement("rectangle", geometry);
 
     await canvasPage.selectElement(drawn);
     await canvasPage.deleteSelected();
@@ -147,9 +166,12 @@ test.describe("Undo / redo", () => {
     // cover individually: it proves the undo/redo STACK correctly handles
     // a mix of different operation types in sequence, not just that each
     // operation type undoes/redoes in isolation.
+    // Known target geometry, waited for directly (see the core smoke test's
+    // comment for why) - this feeds the whole move/resize/delete chain
+    // below, so it has to be the real final draw, not a mid-drag snapshot.
+    const geometry = { x: 550, y: 300, width: 150, height: 100 };
     await canvasPage.drawRectangle({ x: 550, y: 300 }, { x: 700, y: 400 });
-    await canvasPage.expectVisibleElementCount(1);
-    const drawn = (await canvasPage.getScene()).elements[0];
+    const drawn = await canvasPage.waitForDrawnElement("rectangle", geometry);
 
     await canvasPage.selectElement(drawn);
     await canvasPage.moveSelectedElement(drawn, 100, 50);
@@ -204,16 +226,25 @@ test.describe("Undo / redo", () => {
     // Classic history-management bug class: draw A, undo it, draw B —
     // the old "redo A" branch should be gone. If it isn't, redo either
     // resurrects A (wrong element entirely) or corrupts the history.
+    // Known target geometry for both shapes, waited for directly (see the
+    // core smoke test's comment for why) rather than expectVisibleElementCount
+    // + elements[0].
+    const geometryA = { x: 550, y: 300, width: 100, height: 100 };
+    const geometryB = { x: 750, y: 300, width: 100, height: 100 };
     await canvasPage.drawRectangle({ x: 550, y: 300 }, { x: 650, y: 400 });
-    await canvasPage.expectVisibleElementCount(1);
-    const shapeA = (await canvasPage.getScene()).elements[0];
+    const shapeA = await canvasPage.waitForDrawnElement(
+      "rectangle",
+      geometryA,
+    );
 
     await canvasPage.undo();
     await canvasPage.expectVisibleElementCount(0);
 
     await canvasPage.drawRectangle({ x: 750, y: 300 }, { x: 850, y: 400 });
-    await canvasPage.expectVisibleElementCount(1);
-    const shapeB = (await canvasPage.getScene()).elements[0];
+    const shapeB = await canvasPage.waitForDrawnElement(
+      "rectangle",
+      geometryB,
+    );
     expect(shapeB.id).not.toBe(shapeA.id);
 
     // Redo should be a no-op now — there's nothing ahead of B in history.
