@@ -170,15 +170,144 @@ export class CanvasPage {
    * select a shape.
    */
   async selectElement(element: ExcalidrawElement) {
+    await this.selectElements([element]);
+  }
+
+  /**
+   * Marquee-selects several elements at once by dragging one rubber-band box
+   * around the union of their bounding boxes (plus `margin` on every side).
+   *
+   * `margin` matters for the "select some but not all" tests: the box grows
+   * outward from the chosen shapes by this many pixels, so it must stay
+   * SMALLER than the gap to the nearest shape you want left out, otherwise
+   * that neighbour gets swept in too. selectElement (single) is just this
+   * with one element and the original margin of 10.
+   */
+  async selectElements(elements: ExcalidrawElement[], margin = 10) {
     await this.selectTool("selection");
-    const margin = 10;
+    const left = Math.min(...elements.map((el) => el.x));
+    const top = Math.min(...elements.map((el) => el.y));
+    const right = Math.max(...elements.map((el) => el.x + el.width));
+    const bottom = Math.max(...elements.map((el) => el.y + el.height));
     await this.dragOnCanvas(
-      { x: element.x - margin, y: element.y - margin },
-      {
-        x: element.x + element.width + margin,
-        y: element.y + element.height + margin,
-      },
+      { x: left - margin, y: top - margin },
+      { x: right + margin, y: bottom + margin },
     );
+  }
+
+  /**
+   * The point on an element we click to hit it: the midpoint of its top
+   * edge. Unfilled shapes only respond to clicks on their stroke (see
+   * selectElement's note), so a click at the center would hit nothing.
+   */
+  private edgePoint(element: ExcalidrawElement): Point {
+    return { x: element.x + element.width / 2, y: element.y };
+  }
+
+  /** Plain click on an element's stroke: selects it (or its whole group). */
+  async clickElement(element: ExcalidrawElement) {
+    await this.selectTool("selection");
+    const p = this.edgePoint(element);
+    await this.page.mouse.click(p.x, p.y);
+  }
+
+  /**
+   * Shift+click on an element's stroke: toggles it in/out of the current
+   * selection. Shift is held via keyboard down/up around the click so the
+   * modifier is set exactly as a real user's would be.
+   */
+  async shiftClickElement(element: ExcalidrawElement) {
+    await this.selectTool("selection");
+    const p = this.edgePoint(element);
+    await this.page.keyboard.down("Shift");
+    await this.page.mouse.click(p.x, p.y);
+    await this.page.keyboard.up("Shift");
+  }
+
+  /**
+   * Drags an already-selected element (or group member) by (dx, dy),
+   * grabbing it by its top edge. Unlike moveSelectedElement this doesn't
+   * start from the center, because inside a group the center of an unfilled
+   * shape is empty canvas and wouldn't grab anything.
+   */
+  async dragElementByEdge(element: ExcalidrawElement, dx: number, dy: number) {
+    const p = this.edgePoint(element);
+    await this.dragOnCanvas(p, { x: p.x + dx, y: p.y + dy });
+  }
+
+  /** Ctrl/Cmd modifier for this platform, same convention as undo()/redo(). */
+  private get mod() {
+    return process.platform === "darwin" ? "Meta" : "Control";
+  }
+
+  async selectAll() {
+    await this.selectTool("selection");
+    await this.page.keyboard.press(`${this.mod}+A`);
+  }
+
+  async groupSelected() {
+    await this.page.keyboard.press(`${this.mod}+G`);
+  }
+
+  async ungroupSelected() {
+    await this.page.keyboard.press(`${this.mod}+Shift+G`);
+  }
+
+  /** Escape clears the current selection. */
+  async deselectAll() {
+    await this.page.keyboard.press("Escape");
+  }
+
+  /**
+   * Ids currently selected, read from the persisted app state. Like
+   * getScene(), this reads localStorage, so it lags the action by the
+   * ~300ms save debounce - use waitForSelectedIds after an action.
+   */
+  async getSelectedIds(): Promise<string[]> {
+    const state = await this.getAppState();
+    const selected = (state?.selectedElementIds ?? {}) as Record<string, boolean>;
+    return Object.keys(selected).filter((id) => selected[id]);
+  }
+
+  /**
+   * Polls until the selection is exactly `expectedIds` (order-insensitive).
+   * Waits for a KNOWN value rather than "stopped changing", per the suite's
+   * debounce lesson, so it can't settle on a stale in-between read.
+   */
+  async waitForSelectedIds(expectedIds: string[]) {
+    const expected = [...expectedIds].sort();
+    await expect
+      .poll(async () => (await this.getSelectedIds()).sort())
+      .toEqual(expected);
+  }
+
+  /**
+   * Polls until every element in `ids` carries the same outermost group id,
+   * then returns it. The outermost group id is the LAST entry of groupIds
+   * (Excalidraw orders groupIds innermost -> outermost).
+   */
+  async waitForSharedGroup(ids: string[]): Promise<string> {
+    const outerGroupOf = async (id: string) => {
+      const el = await this.getElementById(id);
+      return el?.groupIds[el.groupIds.length - 1];
+    };
+    await expect
+      .poll(async () => {
+        const groups = await Promise.all(ids.map(outerGroupOf));
+        return groups[0] !== undefined && groups.every((g) => g === groups[0]);
+      })
+      .toBe(true);
+    return (await outerGroupOf(ids[0]))!;
+  }
+
+  /** Polls until none of `ids` belongs to any group. */
+  async waitForUngrouped(ids: string[]) {
+    await expect
+      .poll(async () => {
+        const els = await Promise.all(ids.map((id) => this.getElementById(id)));
+        return els.every((el) => el !== undefined && el.groupIds.length === 0);
+      })
+      .toBe(true);
   }
 
   /**
@@ -476,10 +605,7 @@ export class CanvasPage {
 
   /** Selects everything on the canvas and deletes it, leaving an empty scene. */
   async clearCanvas() {
-    await this.selectTool("selection");
-    await this.page.keyboard.press(
-      process.platform === "darwin" ? "Meta+A" : "Control+A",
-    );
+    await this.selectAll();
     await this.deleteSelected();
   }
 
