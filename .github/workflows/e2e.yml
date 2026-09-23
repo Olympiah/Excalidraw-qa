@@ -1,0 +1,116 @@
+name: E2E
+
+# Smoke on every push to main (there is no PR flow, everything goes to main),
+# regression on demand. Traces/screenshots/videos kept when something fails.
+on:
+  push:
+    branches: [main]
+  # Nightly regression, disabled for now. Uncomment to enable (runs on the
+  # default branch only, 02:00 UTC):
+  # schedule:
+  #   - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      repeat:
+        description: "Repeat each test N times (use 5 for the 'no flakes' exit criterion)"
+        default: "1"
+
+env:
+  # Pinned Excalidraw commit under test (also recorded in README) so results
+  # are reproducible. Bump this deliberately, not automatically.
+  EXCALIDRAW_SHA: 2b9da9610083254edaec68871d593fb6b08e9072
+  BASE_URL: http://localhost:3001
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout QA repo
+        uses: actions/checkout@v4
+
+      - name: Checkout Excalidraw at the pinned commit
+        uses: actions/checkout@v4
+        with:
+          repository: excalidraw/excalidraw
+          ref: ${{ env.EXCALIDRAW_SHA }}
+          path: excalidraw
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: yarn
+          cache-dependency-path: excalidraw/yarn.lock
+
+      # Second cache: the test project's npm packages (setup-node only
+      # handles one package manager per step).
+      - uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('tests/package-lock.json') }}
+          restore-keys: npm-${{ runner.os }}-
+
+      # Third cache: the Chromium download. Keyed on the resolved Playwright
+      # version, since each version needs its own browser build.
+      - name: Get Playwright version
+        id: pw
+        working-directory: tests
+        run: echo "version=$(node -p "require('./package-lock.json').packages['node_modules/@playwright/test'].version")" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        id: pw-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
+
+      - name: Install and start Excalidraw
+        working-directory: excalidraw
+        run: |
+          yarn install --frozen-lockfile
+          # Dev server, same as local runs. --strictPort makes Vite fail
+          # instead of silently hopping to 3002 if 3001 is taken, which would
+          # leave the tests pointing at the wrong (or no) server.
+          nohup yarn --cwd ./excalidraw-app vite --port 3001 --strictPort --host 127.0.0.1 > ../excalidraw.log 2>&1 &
+
+      - name: Wait for the app
+        run: npx --yes wait-on --timeout 180000 http-get://127.0.0.1:3001
+
+      - name: Install test dependencies
+        working-directory: tests
+        run: |
+          npm ci
+          # Browser binaries come from cache when available; the OS-level
+          # libraries are not cached, so they are always installed.
+          if [ "${{ steps.pw-cache.outputs.cache-hit }}" = "true" ]; then
+            npx playwright install-deps chromium
+          else
+            npx playwright install --with-deps chromium
+          fi
+
+      - name: Run tests
+        working-directory: tests
+        run: |
+          # Push runs @smoke only; manual (and nightly, if enabled) runs @regression.
+          if [ "${{ github.event_name }}" = "push" ]; then
+            GREP="--grep @smoke"
+          else
+            GREP="--grep @regression"
+          fi
+          npx playwright test $GREP --repeat-each "${{ inputs.repeat || 1 }}"
+
+      - name: Upload Playwright report and failure artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            tests/playwright-report/
+            tests/test-results/
+          retention-days: 14
+
+      - name: Upload app log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: excalidraw-log
+          path: excalidraw.log
