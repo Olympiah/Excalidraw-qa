@@ -13,7 +13,7 @@ The goal is to show a full QA cycle on an editor: risk analysis, test planning, 
 | 1 | Risk map, test strategy, test plan | Done (draft) |
 | 2 | Exploratory sessions, test case execution, bug reports | Done |
 | 3 | Playwright + TypeScript suite, GitHub Actions CI | Done (pending first green CI run) |
-| 4 | Case study write-up | Planned |
+| 4 | Case study write-up | Done |
 
 ## What is in this repo
 
