@@ -20,6 +20,9 @@ export interface ExcalidrawElement {
   y: number;
   width: number;
   height: number;
+  // Rotation in radians, normalized to [0, 2*PI). Typed explicitly so
+  // transform tests can do arithmetic on it without a cast.
+  angle: number;
   // In Excalidraw's in-memory state, deleting an element flips isDeleted
   // rather than removing it from the array — BUT that's not what ends up
   // in localStorage. excalidraw-app/data/LocalData.ts calls

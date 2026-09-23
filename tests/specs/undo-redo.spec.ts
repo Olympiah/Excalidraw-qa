@@ -24,14 +24,13 @@ function expectElementMatches(
 
 // Undo/redo is the highest risk-scored flow in the test strategy (§3.3,
 // item 1). Tags live on individual tests, not this describe block — putting
-// them on the block would stamp EVERY test below with both tags (Playwright
-// matches against the full title, describe + test name combined), which
-// would make "@smoke" mean "the whole file" instead of "the fast, critical
-// subset that runs on every PR." Only the single core happy-path test below
-// is tagged @smoke; everything else is @regression only (the full nightly
-// run).
+// them on the block would stamp EVERY test below with the same tag
+// (Playwright matches against the full title, describe + test name
+// combined), which would make "@smoke" mean "the whole file" instead of "the
+// core functionality checks that run on every PR." Only the core happy-path
+// test below is @smoke; the history walk and edge cases are @regression.
 test.describe("Undo / redo", () => {
-  test("undo removes a drawn rectangle, redo restores it @smoke @regression", async ({
+  test("undo removes a drawn rectangle, redo restores it @smoke", async ({
     canvasPage,
   }) => {
     const from = { x: 550, y: 300 };
@@ -77,7 +76,7 @@ test.describe("Undo / redo", () => {
     expectElementMatches(restored!, drawn);
   });
 
-  test("undo reverts a move, redo reapplies it", async ({ canvasPage }) => {
+  test("undo reverts a move, redo reapplies it @regression", async ({ canvasPage }) => {
     // Known target geometry, waited for directly - see the core smoke
     // test's comment above for why this replaces expectVisibleElementCount
     // + elements[0]. This geometry becomes the move's starting point below,
@@ -105,7 +104,7 @@ test.describe("Undo / redo", () => {
     expectElementMatches(afterRedo, moved);
   });
 
-  test("undo reverts a resize, redo reapplies it", async ({ canvasPage }) => {
+  test("undo reverts a resize, redo reapplies it @regression", async ({ canvasPage }) => {
     // Known target geometry, waited for directly (see the core smoke test's
     // comment for why) - this becomes the resize's starting point below.
     const geometry = { x: 550, y: 300, width: 150, height: 100 };
@@ -130,7 +129,7 @@ test.describe("Undo / redo", () => {
     expectElementMatches(afterRedo, resized);
   });
 
-  test("undo reverts a delete, redo reapplies it", async ({ canvasPage }) => {
+  test("undo reverts a delete, redo reapplies it @regression", async ({ canvasPage }) => {
     // Known target geometry, waited for directly (see the core smoke test's
     // comment for why) - drives selectElement's marquee-select below, so a
     // mid-drag capture here would make the delete select/delete nothing.

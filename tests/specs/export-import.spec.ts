@@ -15,7 +15,7 @@ import { test, expect } from "../fixtures/base";
 // a download *started*.
 
 test.describe("Export / import", () => {
-  test("EX-017: exporting and re-importing an .excalidraw file restores the scene @regression", async ({
+  test("EX-017: exporting and re-importing an .excalidraw file restores the scene @smoke", async ({
     canvasPage,
   }) => {
     // Fixture scene per the manual test case: 3 shapes + 1 text.
